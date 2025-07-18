@@ -5,10 +5,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { addDoc, collection, deleteDoc, doc, getFirestore, onSnapshot, query, setDoc, updateDoc } from 'firebase/firestore';
-import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
+
+// --- Supabase Import ---
+import { createClient } from '@supabase/supabase-js';
+
 
 // =================================================================
-//  INSTRUÇÃO: Cole a configuração do seu projeto Firebase aqui.
+//  INSTRUÇÃO 1: Cole a configuração do seu projeto Firebase aqui.
 // =================================================================
 const firebaseConfig = {
     apiKey: "AIzaSyDw5pBRNtVT5rOPYScyuPnZffTES2h3hqU",
@@ -19,6 +22,17 @@ const firebaseConfig = {
     appId: "1:923684279107:web:ecfa62bd5396d73fdc95f6",
     measurementId: "G-YJYZBQTB0M"
   };
+
+// =================================================================
+//  INSTRUÇÃO 2: Cole as credenciais do seu projeto Supabase aqui.
+// =================================================================
+const supabaseUrl = 'SUA_URL_DO_PROJETO_SUPABASE';
+const supabaseAnonKey = 'SUA_CHAVE_ANON_PUBLIC_SUPABASE';
+
+// --- ID Compartilhado para o Casamento ---
+// Este ID garante que ambos os usuários acessem os mesmos dados.
+const SHARED_WEDDING_ID = 'casamento-alexandre-e-andressa';
+
 
 // --- E-mails autorizados ---
 const EMAILS_AUTORIZADOS = [
@@ -83,8 +97,10 @@ const AccessDeniedPage = ({ user, onLogout }) => (
 );
 
 // --- Componente Principal da Aplicação (O Painel) ---
-const WeddingPlanner = ({ user, onLogout, db, storage }) => {
-    const userId = user.uid;
+const WeddingPlanner = ({ user, onLogout, db, supabase }) => {
+    // Usamos o ID compartilhado em vez do ID do usuário para os caminhos do banco de dados
+    const weddingId = SHARED_WEDDING_ID; 
+
     const [abaAtiva, setAbaAtiva] = useState('dashboard');
     const [dataCasamento, setDataCasamento] = useState('');
     const [metaOrcamento, setMetaOrcamento] = useState(0);
@@ -92,24 +108,18 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
     const [despesas, setDespesas] = useState([]);
     const [novaRenda, setNovaRenda] = useState({ descricao: '', valor: '', data: '' });
     const [novaDespesa, setNovaDespesa] = useState({ categoria: '', descricao: '', valor: '', data: '', parcelas: '1' });
-    const [uploading, setUploading] = useState(null); // ID da despesa em upload
+    const [uploading, setUploading] = useState(null);
 
-    // --- Busca e Sincronização de Dados ---
     useEffect(() => {
-        if (!db || !userId) return;
-        const userDocPath = `/users/${userId}`;
-        const rendasRef = collection(db, `${userDocPath}/rendas`);
-        const despesasRef = collection(db, `${userDocPath}/despesas`);
-        const settingsRef = doc(db, `${userDocPath}/settings/main`);
+        if (!db || !weddingId) return;
+        // O caminho agora usa "weddings" e o ID compartilhado
+        const weddingDocPath = `/weddings/${weddingId}`;
+        const rendasRef = collection(db, `${weddingDocPath}/rendas`);
+        const despesasRef = collection(db, `${weddingDocPath}/despesas`);
+        const settingsRef = doc(db, `${weddingDocPath}/settings/main`);
 
-        const unsubRendas = onSnapshot(query(rendasRef), snap => {
-            const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data));
-            setRendas(data);
-        });
-        const unsubDespesas = onSnapshot(query(despesasRef), snap => {
-            const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data));
-            setDespesas(data);
-        });
+        const unsubRendas = onSnapshot(query(rendasRef), snap => setRendas(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data))));
+        const unsubDespesas = onSnapshot(query(despesasRef), snap => setDespesas(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data))));
         const unsubSettings = onSnapshot(settingsRef, doc => {
             if (doc.exists()) {
                 const data = doc.data();
@@ -122,20 +132,19 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
         });
 
         return () => { unsubRendas(); unsubDespesas(); unsubSettings(); };
-    }, [db, userId]);
+    }, [db, weddingId]);
 
-    // --- Funções de Manipulação de Dados ---
-    const getCollectionRef = (name) => collection(db, `/users/${userId}/${name}`);
-    const getDocRef = (name, id) => doc(db, `/users/${userId}/${name}/${id}`);
+    const getCollectionRef = (name) => collection(db, `/weddings/${weddingId}/${name}`);
+    const getDocRef = (name, id) => doc(db, `/weddings/${weddingId}/${name}/${id}`);
 
     const adicionarRenda = useCallback(async () => {
         if (novaRenda.descricao && novaRenda.valor && novaRenda.data) {
             await addDoc(getCollectionRef('rendas'), { ...novaRenda, valor: parseFloat(novaRenda.valor) });
             setNovaRenda({ descricao: '', valor: '', data: '' });
         }
-    }, [novaRenda, db, userId]);
+    }, [novaRenda, db, weddingId]);
 
-    const deletarRenda = useCallback(async (id) => await deleteDoc(getDocRef('rendas', id)), [db, userId]);
+    const deletarRenda = useCallback(async (id) => await deleteDoc(getDocRef('rendas', id)), [db, weddingId]);
 
     const adicionarDespesa = useCallback(async () => {
         const { categoria, descricao, valor, data, parcelas } = novaDespesa;
@@ -155,30 +164,37 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
             }
             setNovaDespesa({ categoria: '', descricao: '', valor: '', data: '', parcelas: '1' });
         }
-    }, [novaDespesa, db, userId]);
+    }, [novaDespesa, db, weddingId]);
 
-    const alternarPagamento = useCallback(async (id, status) => await updateDoc(getDocRef('despesas', id), { pago: !status }), [db, userId]);
-    const deletarDespesa = useCallback(async (id) => await deleteDoc(getDocRef('despesas', id)), [db, userId]);
-    const atualizarConfig = useCallback(async (config) => await setDoc(doc(db, `/users/${userId}/settings/main`), config, { merge: true }), [db, userId]);
+    const alternarPagamento = useCallback(async (id, status) => await updateDoc(getDocRef('despesas', id), { pago: !status }), [db, weddingId]);
+    const deletarDespesa = useCallback(async (id) => await deleteDoc(getDocRef('despesas', id)), [db, weddingId]);
+    const atualizarConfig = useCallback(async (config) => await setDoc(doc(db, `/weddings/${weddingId}/settings/main`), config, { merge: true }), [db, weddingId]);
 
     const uploadComprovante = async (e, despesaId) => {
         const file = e.target.files[0];
-        if (!file || !storage || !userId) return;
+        if (!file || !supabase) return;
+
         setUploading(despesaId);
-        const storageRef = ref(storage, `comprovantes/${userId}/${despesaId}/${file.name}`);
+        const filePath = `${weddingId}/${despesaId}-${Date.now()}-${file.name}`;
+        
         try {
-            const uploadTask = await uploadBytes(storageRef, file);
-            const downloadURL = await getDownloadURL(uploadTask.ref);
-            await updateDoc(getDocRef('despesas', despesaId), { comprovanteURL: downloadURL });
+            const { error: uploadError } = await supabase.storage.from('comprovantes').upload(filePath, file);
+            if (uploadError) throw uploadError;
+
+            const { data } = supabase.storage.from('comprovantes').getPublicUrl(filePath);
+            if (data.publicUrl) {
+                 await updateDoc(getDocRef('despesas', despesaId), { comprovanteURL: data.publicUrl });
+            } else {
+                throw new Error("Não foi possível obter a URL pública do arquivo.");
+            }
         } catch (error) {
-            console.error("Erro no upload:", error);
-            alert("Falha no upload do comprovante.");
+            console.error("Erro no upload para o Supabase:", error);
+            alert(`Falha no upload do comprovante: ${error.message}`);
         } finally {
             setUploading(null);
         }
     };
 
-    // --- Cálculos e Lógica de Planejamento (Memoizados) ---
     const totalRenda = useMemo(() => rendas.reduce((s, r) => s + r.valor, 0), [rendas]);
     const totalDespesas = useMemo(() => despesas.reduce((s, d) => s + d.valor, 0), [despesas]);
     const totalPago = useMemo(() => despesas.filter(d => d.pago).reduce((s, d) => s + d.valor, 0), [despesas]);
@@ -193,37 +209,24 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
         const diffTime = dataFinal - hoje;
         const diasAteCasamento = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
         const mesesAteCasamento = Math.max(1, diasAteCasamento / 30.44);
-
         const alertas = [];
         const sugestoes = [];
         const analiseGastos = [];
-
         const metaEconomiaMensal = aPagar > 0 ? aPagar / mesesAteCasamento : 0;
-        if (metaEconomiaMensal > 0) {
-            alertas.push({ tipo: 'info', icone: PiggyBank, texto: `Para quitar tudo a tempo, vocês precisam economizar em média ${formatarMoeda(metaEconomiaMensal)} por mês.` });
-        }
-
+        if (metaEconomiaMensal > 0) alertas.push({ tipo: 'info', icone: PiggyBank, texto: `Para quitar tudo a tempo, vocês precisam economizar em média ${formatarMoeda(metaEconomiaMensal)} por mês.` });
         const pagamentos30dias = despesas.filter(d => {
             const dataVencimento = new Date(d.data + 'T00:00:00');
             const diffDias = (dataVencimento - hoje) / (1000 * 60 * 60 * 24);
             return !d.pago && diffDias > 0 && diffDias <= 30;
         }).reduce((soma, d) => soma + d.valor, 0);
-
-        if (pagamentos30dias > saldoAtual) {
-            alertas.push({ tipo: 'error', icone: AlertCircle, texto: `Atenção: seu saldo atual (${formatarMoeda(saldoAtual)}) não cobre os pagamentos dos próximos 30 dias (${formatarMoeda(pagamentos30dias)}).` });
-        }
-
-        if (totalDespesas > metaOrcamento) {
-            alertas.push({ tipo: 'warning', icone: Target, texto: `Sua meta de orçamento foi ultrapassada em ${formatarMoeda(totalDespesas - metaOrcamento)}.` });
-        }
-
+        if (pagamentos30dias > saldoAtual) alertas.push({ tipo: 'error', icone: AlertCircle, texto: `Atenção: seu saldo atual (${formatarMoeda(saldoAtual)}) não cobre os pagamentos dos próximos 30 dias (${formatarMoeda(pagamentos30dias)}).` });
+        if (totalDespesas > metaOrcamento) alertas.push({ tipo: 'warning', icone: Target, texto: `Sua meta de orçamento foi ultrapassada em ${formatarMoeda(totalDespesas - metaOrcamento)}.` });
         if (diasAteCasamento > 365) sugestoes.push({ icone: ListChecks, texto: "Falta mais de 1 ano: Ótimo momento para definir o estilo do casamento, a lista de convidados e contratar fornecedores principais como Local e Buffet." });
         else if (diasAteCasamento > 180) sugestoes.push({ icone: ListChecks, texto: "Entre 6-12 meses: Contratem fotógrafo, filmagem e música. Pesquisem os trajes e a decoração." });
         else if (diasAteCasamento > 90) sugestoes.push({ icone: ListChecks, texto: "Entre 3-6 meses: Enviem os convites, definam o cardápio e comprem as alianças." });
         else if (diasAteCasamento > 30) sugestoes.push({ icone: ListChecks, texto: "Últimos 3 meses: Façam a degustação final, confirmem presença dos convidados e alinhem os detalhes finais com todos os fornecedores." });
         else sugestoes.push({ icone: ListChecks, texto: "Reta final! Confirmem todos os pagamentos e horários. No mais, relaxem e preparem-se para o grande dia!" });
         sugestoes.push({ icone: Lightbulb, texto: "Reservem de 5% a 10% do orçamento total para despesas inesperadas. É uma margem de segurança importante." });
-
         CATEGORIAS.forEach(cat => {
             const gastoCategoria = despesas.filter(d => d.categoria === cat.name).reduce((soma, d) => soma + d.valor, 0);
             if (gastoCategoria > 0) {
@@ -241,7 +244,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
     return (
         <div className="min-h-screen bg-gradient-to-br from-rose-50 to-pink-50 font-sans">
             <div className="max-w-7xl mx-auto p-4 sm:p-6">
-                {/* Cabeçalho */}
                 <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
                         <div className="flex items-center space-x-4">
@@ -264,8 +266,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                         </div>
                     </div>
                 </div>
-
-                {/* Navegação */}
                 <div className="bg-white rounded-2xl shadow-xl mb-6">
                     <div className="flex space-x-1 p-2">
                         {['dashboard', 'despesas', 'renda', 'planejamento'].map((aba) => (
@@ -275,8 +275,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                         ))}
                     </div>
                 </div>
-
-                {/* Conteúdo das Abas */}
                 {abaAtiva === 'dashboard' && (
                     <div className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -292,7 +290,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                         </div>
                     </div>
                 )}
-                
                 {abaAtiva === 'despesas' && (
                     <div className="space-y-6">
                         <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -306,7 +303,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                                 <button onClick={adicionarDespesa} className="bg-gradient-to-r from-rose-500 to-pink-500 text-white px-6 py-3 rounded-xl font-medium hover:from-rose-600 hover:to-pink-600 transition-all flex items-center justify-center space-x-2"><PlusCircle className="w-5 h-5" /><span>Adicionar</span></button>
                             </div>
                         </div>
-                        
                         <div className="bg-white rounded-2xl shadow-xl p-6">
                             <h3 className="text-lg font-semibold mb-4">Lista de Despesas</h3>
                             <div className="space-y-3">
@@ -345,7 +341,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                         </div>
                     </div>
                 )}
-
                 {abaAtiva === 'renda' && (
                     <div className="space-y-6">
                         <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -363,7 +358,6 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
                         </div>
                     </div>
                 )}
-
                 {abaAtiva === 'planejamento' && (
                     <div className="space-y-6">
                         <div className="text-center bg-white rounded-2xl shadow-xl p-6">
@@ -414,22 +408,27 @@ const WeddingPlanner = ({ user, onLogout, db, storage }) => {
 const App = () => {
     const [auth, setAuth] = useState(null);
     const [db, setDb] = useState(null);
-    const [storage, setStorage] = useState(null);
+    const [supabase, setSupabase] = useState(null);
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [configError, setConfigError] = useState(false);
+    const [configError, setConfigError] = useState(null);
 
     useEffect(() => {
-        if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "SUA_API_KEY") {
-            console.error("Configuração do Firebase não encontrada!");
-            setConfigError(true);
+        if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "SUA_API_KEY_DO_FIREBASE") {
+            setConfigError("Firebase");
             setLoading(false);
             return;
         }
+        if (!supabaseUrl || supabaseUrl === 'SUA_URL_DO_PROJETO_SUPABASE') {
+            setConfigError("Supabase");
+            setLoading(false);
+            return;
+        }
+
         const app = initializeApp(firebaseConfig);
         setAuth(getAuth(app));
         setDb(getFirestore(app));
-        setStorage(getStorage(app));
+        setSupabase(createClient(supabaseUrl, supabaseAnonKey));
     }, []);
 
     useEffect(() => {
@@ -467,7 +466,7 @@ const App = () => {
             <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 text-red-700 p-4 text-center">
                 <AlertCircle className="w-16 h-16 mb-4" />
                 <h1 className="text-2xl font-bold mb-2">Erro de Configuração</h1>
-                <p className="max-w-md">A configuração do Firebase não foi adicionada. Por favor, edite o arquivo <strong>App.jsx</strong> e cole as credenciais do seu projeto Firebase para continuar.</p>
+                <p className="max-w-md">A configuração do {configError} não foi adicionada. Por favor, edite o arquivo <strong>App.jsx</strong> e cole as credenciais corretas para continuar.</p>
             </div>
         );
     }
@@ -477,11 +476,10 @@ const App = () => {
     }
 
     if (!EMAILS_AUTORIZADOS.includes(user.email)) {
-        console.warn(`Usuário não autorizado: ${user.email}`);
         return <AccessDeniedPage user={user} onLogout={handleLogout} />;
     }
 
-    return <WeddingPlanner user={user} onLogout={handleLogout} db={db} storage={storage} />;
+    return <WeddingPlanner user={user} onLogout={handleLogout} db={db} supabase={supabase} />;
 };
 
 export default App;
