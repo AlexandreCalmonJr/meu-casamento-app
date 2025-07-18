@@ -1,5 +1,30 @@
-import { AlertCircle, Calendar, Camera, CheckCircle, DollarSign, Flower, Gem, Heart, Lightbulb, ListChecks, MapPin, Music, PieChart, PiggyBank, PlusCircle, Shirt, Target, Trash2, TrendingDown, TrendingUp, Utensils } from 'lucide-react';
-import React, { useCallback, useMemo, useState } from 'react';
+import { AlertCircle, Calendar, Camera, CheckCircle, DollarSign, Flower, Gem, Heart, Lightbulb, ListChecks, LogOut, MapPin, Music, Paperclip, PieChart, PiggyBank, PlusCircle, ShieldX, Shirt, Target, Trash2, TrendingDown, TrendingUp, UploadCloud, Utensils } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+
+// --- Firebase Imports ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { addDoc, collection, deleteDoc, doc, getFirestore, onSnapshot, query, setDoc, updateDoc } from 'firebase/firestore';
+import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
+
+// =================================================================
+//  INSTRUÇÃO: Cole a configuração do seu projeto Firebase aqui.
+// =================================================================
+const firebaseConfig = {
+    apiKey: "AIzaSyDw5pBRNtVT5rOPYScyuPnZffTES2h3hqU",
+    authDomain: "financas-eb654.firebaseapp.com",
+    projectId: "financas-eb654",
+    storageBucket: "financas-eb654.firebasestorage.app",
+    messagingSenderId: "923684279107",
+    appId: "1:923684279107:web:ecfa62bd5396d73fdc95f6",
+    measurementId: "G-YJYZBQTB0M"
+  };
+
+// --- E-mails autorizados ---
+const EMAILS_AUTORIZADOS = [
+    'alexandrecalmonjunior@gmail.com',
+    'andressarsl24@gmail.com'
+];
 
 // --- Constantes e Funções Utilitárias ---
 const CATEGORIAS = [
@@ -13,107 +38,156 @@ const CATEGORIAS = [
     { name: 'Outros', icon: Heart, color: 'bg-teal-500', avgPercent: 3 }
 ];
 
-const formatarMoeda = (valor) => {
-    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor);
-};
-
+const formatarMoeda = (valor) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor || 0);
 const formatarData = (stringData) => {
     if (!stringData) return '';
     const data = new Date(stringData + 'T00:00:00');
-    return new Intl.DateTimeFormat('pt-BR').format(data);
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(data);
 };
 
+// --- Componente de Login ---
+const LoginPage = ({ onLogin }) => (
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-rose-50 to-pink-50">
+        <div className="text-center bg-white p-10 rounded-2xl shadow-xl">
+            <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">Finanças do Casamento</h1>
+            <p className="text-gray-600 mb-8">Faça o login para planejar o grande dia.</p>
+            <button
+                onClick={onLogin}
+                className="w-full bg-white border border-gray-300 text-gray-700 font-semibold py-3 px-6 rounded-lg flex items-center justify-center space-x-3 hover:bg-gray-50 transition-all"
+            >
+                <img src="https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png" alt="Google logo" className="w-6 h-6" />
+                <span>Entrar com o Google</span>
+            </button>
+        </div>
+    </div>
+);
 
-const AppFinancasCasamento = () => {
-    // --- Estados do Aplicativo ---
+// --- Componente de Acesso Negado ---
+const AccessDeniedPage = ({ user, onLogout }) => (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 to-yellow-50 text-center p-4">
+        <ShieldX className="w-20 h-20 text-red-500 mb-6" />
+        <h1 className="text-4xl font-bold text-gray-800 mb-3">Acesso Negado</h1>
+        <p className="text-lg text-gray-600 mb-4">Olá, {user.displayName}.</p>
+        <p className="text-md text-gray-500 max-w-md mb-8">
+            Seu e-mail (<span className="font-semibold">{user.email}</span>) não tem permissão para acessar este painel. Por favor, contate o administrador se você acredita que isso é um erro.
+        </p>
+        <button
+            onClick={onLogout}
+            className="bg-red-500 text-white font-semibold py-3 px-8 rounded-lg flex items-center justify-center space-x-2 hover:bg-red-600 transition-all"
+        >
+            <LogOut className="w-5 h-5" />
+            <span>Sair</span>
+        </button>
+    </div>
+);
+
+// --- Componente Principal da Aplicação (O Painel) ---
+const WeddingPlanner = ({ user, onLogout, db, storage }) => {
+    const userId = user.uid;
     const [abaAtiva, setAbaAtiva] = useState('dashboard');
-    const [dataCasamento, setDataCasamento] = useState('2026-10-17');
-    const [metaOrcamento, setMetaOrcamento] = useState(60000);
-
-    const [rendas, setRendas] = useState([
-        { id: 1, descricao: 'Economias do casal', valor: 30000, data: '2025-07-01' },
-        { id: 2, descricao: 'Presente (pais da noiva)', valor: 10000, data: '2025-08-01' },
-    ]);
+    const [dataCasamento, setDataCasamento] = useState('');
+    const [metaOrcamento, setMetaOrcamento] = useState(0);
+    const [rendas, setRendas] = useState([]);
+    const [despesas, setDespesas] = useState([]);
     const [novaRenda, setNovaRenda] = useState({ descricao: '', valor: '', data: '' });
-
-    const [despesas, setDespesas] = useState([
-        { id: 1, idRaiz: 1, categoria: 'Local', descricao: 'Salão de festas', valor: 25000, data: '2025-11-15', pago: false },
-        { id: 2, idRaiz: 2, categoria: 'Buffet', descricao: 'Buffet completo', valor: 15000, data: '2026-09-15', pago: true },
-        { id: 3, idRaiz: 3, categoria: 'Fotografia', descricao: 'Fotógrafo (Sinal)', valor: 2000, data: '2025-12-20', pago: true },
-        { id: 4, idRaiz: 3, categoria: 'Fotografia', descricao: 'Fotógrafo (Restante)', valor: 4000, data: '2026-10-10', pago: false },
-    ]);
     const [novaDespesa, setNovaDespesa] = useState({ categoria: '', descricao: '', valor: '', data: '', parcelas: '1' });
+    const [uploading, setUploading] = useState(null); // ID da despesa em upload
 
-    // --- Cálculos Financeiros Memoizados ---
-    const totalRenda = useMemo(() => rendas.reduce((soma, renda) => soma + renda.valor, 0), [rendas]);
-    const totalDespesas = useMemo(() => despesas.reduce((soma, despesa) => soma + despesa.valor, 0), [despesas]);
-    const totalPago = useMemo(() => despesas.filter(d => d.pago).reduce((soma, d) => soma + d.valor, 0), [despesas]);
-    const saldoAtual = useMemo(() => totalRenda - totalPago, [totalRenda, totalPago]);
-    const aPagar = useMemo(() => totalDespesas - totalPago, [totalDespesas, totalPago]);
-    const usoOrcamento = useMemo(() => (metaOrcamento > 0 ? (totalDespesas / metaOrcamento) * 100 : 0), [metaOrcamento, totalDespesas]);
+    // --- Busca e Sincronização de Dados ---
+    useEffect(() => {
+        if (!db || !userId) return;
+        const userDocPath = `/users/${userId}`;
+        const rendasRef = collection(db, `${userDocPath}/rendas`);
+        const despesasRef = collection(db, `${userDocPath}/despesas`);
+        const settingsRef = doc(db, `${userDocPath}/settings/main`);
 
-    // --- Funções de Manipulação de Estado ---
-    const adicionarRenda = useCallback(() => {
+        const unsubRendas = onSnapshot(query(rendasRef), snap => {
+            const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data));
+            setRendas(data);
+        });
+        const unsubDespesas = onSnapshot(query(despesasRef), snap => {
+            const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(a.data) - new Date(b.data));
+            setDespesas(data);
+        });
+        const unsubSettings = onSnapshot(settingsRef, doc => {
+            if (doc.exists()) {
+                const data = doc.data();
+                setDataCasamento(data.dataCasamento || '2026-10-17');
+                setMetaOrcamento(data.metaOrcamento || 60000);
+            } else {
+                setDataCasamento('2026-10-17');
+                setMetaOrcamento(60000);
+            }
+        });
+
+        return () => { unsubRendas(); unsubDespesas(); unsubSettings(); };
+    }, [db, userId]);
+
+    // --- Funções de Manipulação de Dados ---
+    const getCollectionRef = (name) => collection(db, `/users/${userId}/${name}`);
+    const getDocRef = (name, id) => doc(db, `/users/${userId}/${name}/${id}`);
+
+    const adicionarRenda = useCallback(async () => {
         if (novaRenda.descricao && novaRenda.valor && novaRenda.data) {
-            const renda = { id: Date.now(), ...novaRenda, valor: parseFloat(novaRenda.valor) };
-            setRendas(prev => [...prev, renda].sort((a, b) => new Date(a.data) - new Date(b.data)));
+            await addDoc(getCollectionRef('rendas'), { ...novaRenda, valor: parseFloat(novaRenda.valor) });
             setNovaRenda({ descricao: '', valor: '', data: '' });
         }
-    }, [novaRenda]);
-    
-    const deletarRenda = useCallback((id) => {
-        setRendas(prev => prev.filter(r => r.id !== id));
-    }, []);
+    }, [novaRenda, db, userId]);
 
-    const adicionarDespesa = useCallback(() => {
+    const deletarRenda = useCallback(async (id) => await deleteDoc(getDocRef('rendas', id)), [db, userId]);
+
+    const adicionarDespesa = useCallback(async () => {
         const { categoria, descricao, valor, data, parcelas } = novaDespesa;
         if (categoria && descricao && valor && data) {
             const numValor = parseFloat(valor);
             const numParcelas = parseInt(parcelas, 10) || 1;
             const idRaiz = Date.now();
-            const novasDespesas = [];
-
             if (numParcelas > 1) {
                 const valorParcela = numValor / numParcelas;
                 for (let i = 0; i < numParcelas; i++) {
                     const dataParcela = new Date(data + 'T00:00:00');
                     dataParcela.setMonth(dataParcela.getMonth() + i);
-                    novasDespesas.push({
-                        id: idRaiz + i,
-                        idRaiz,
-                        categoria,
-                        descricao: `${descricao} (Parcela ${i + 1}/${numParcelas})`,
-                        valor: valorParcela,
-                        data: dataParcela.toISOString().split('T')[0],
-                        pago: false,
-                    });
+                    await addDoc(getCollectionRef('despesas'), { idRaiz, categoria, descricao: `${descricao} (${i + 1}/${numParcelas})`, valor: valorParcela, data: dataParcela.toISOString().split('T')[0], pago: false });
                 }
             } else {
-                novasDespesas.push({
-                    id: idRaiz,
-                    idRaiz,
-                    categoria,
-                    descricao,
-                    valor: numValor,
-                    data,
-                    pago: false,
-                });
+                await addDoc(getCollectionRef('despesas'), { idRaiz, categoria, descricao, valor: numValor, data, pago: false });
             }
-            setDespesas(prev => [...prev, ...novasDespesas].sort((a, b) => new Date(a.data) - new Date(b.data)));
             setNovaDespesa({ categoria: '', descricao: '', valor: '', data: '', parcelas: '1' });
         }
-    }, [novaDespesa]);
-    
-    const alternarPagamento = useCallback((id) => {
-        setDespesas(prev => prev.map(d => d.id === id ? { ...d, pago: !d.pago } : d));
-    }, []);
+    }, [novaDespesa, db, userId]);
 
-    const deletarDespesa = useCallback((id) => {
-        setDespesas(prev => prev.filter(d => d.id !== id));
-    }, []);
+    const alternarPagamento = useCallback(async (id, status) => await updateDoc(getDocRef('despesas', id), { pago: !status }), [db, userId]);
+    const deletarDespesa = useCallback(async (id) => await deleteDoc(getDocRef('despesas', id)), [db, userId]);
+    const atualizarConfig = useCallback(async (config) => await setDoc(doc(db, `/users/${userId}/settings/main`), config, { merge: true }), [db, userId]);
 
-    // --- GERAÇÃO DE INSIGHTS E PLANEJAMENTO ---
+    const uploadComprovante = async (e, despesaId) => {
+        const file = e.target.files[0];
+        if (!file || !storage || !userId) return;
+        setUploading(despesaId);
+        const storageRef = ref(storage, `comprovantes/${userId}/${despesaId}/${file.name}`);
+        try {
+            const uploadTask = await uploadBytes(storageRef, file);
+            const downloadURL = await getDownloadURL(uploadTask.ref);
+            await updateDoc(getDocRef('despesas', despesaId), { comprovanteURL: downloadURL });
+        } catch (error) {
+            console.error("Erro no upload:", error);
+            alert("Falha no upload do comprovante.");
+        } finally {
+            setUploading(null);
+        }
+    };
+
+    // --- Cálculos e Lógica de Planejamento (Memoizados) ---
+    const totalRenda = useMemo(() => rendas.reduce((s, r) => s + r.valor, 0), [rendas]);
+    const totalDespesas = useMemo(() => despesas.reduce((s, d) => s + d.valor, 0), [despesas]);
+    const totalPago = useMemo(() => despesas.filter(d => d.pago).reduce((s, d) => s + d.valor, 0), [despesas]);
+    const saldoAtual = useMemo(() => totalRenda - totalPago, [totalRenda, totalPago]);
+    const aPagar = useMemo(() => totalDespesas - totalPago, [totalDespesas, totalPago]);
+    const usoOrcamento = useMemo(() => (metaOrcamento > 0 ? (totalDespesas / metaOrcamento) * 100 : 0), [metaOrcamento, totalDespesas]);
+
     const planejamento = useMemo(() => {
+        if (!dataCasamento) return { diasAteCasamento: 0, alertas: [], sugestoes: [], analiseGastos: [] };
         const hoje = new Date();
         const dataFinal = new Date(dataCasamento + 'T00:00:00');
         const diffTime = dataFinal - hoje;
@@ -161,10 +235,8 @@ const AppFinancasCasamento = () => {
                 analiseGastos.push({ categoria: cat.name, percentualReal: percentualReal.toFixed(1), percentualMedio: percentualMedio, tipo: tipo });
             }
         });
-
         return { diasAteCasamento, alertas, sugestoes, analiseGastos };
-    }, [dataCasamento, despesas, rendas, metaOrcamento]);
-
+    }, [dataCasamento, despesas, rendas, metaOrcamento, aPagar, saldoAtual, totalDespesas]);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-rose-50 to-pink-50 font-sans">
@@ -173,21 +245,22 @@ const AppFinancasCasamento = () => {
                 <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
                         <div className="flex items-center space-x-4">
-                            <div className="bg-gradient-to-r from-rose-500 to-pink-500 p-3 rounded-full"><Heart className="w-8 h-8 text-white" /></div>
+                            <img src={user.photoURL} alt={user.displayName} className="w-12 h-12 rounded-full" />
                             <div>
                                 <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Finanças do Casamento</h1>
-                                <p className="text-gray-600">Seu planejamento para o grande dia</p>
+                                <p className="text-gray-600">Bem-vindo(a), {user.displayName}!</p>
                             </div>
                         </div>
-                        <div className="flex flex-col sm:flex-row items-center gap-4">
-                             <div className="text-center sm:text-right">
+                        <div className="flex items-center gap-4">
+                            <div className="text-center sm:text-right">
                                 <div className="text-sm text-gray-500 flex items-center justify-center sm:justify-end gap-2"><Target className="w-4 h-4" /> Meta</div>
-                                <input type="number" value={metaOrcamento} onChange={e => setMetaOrcamento(parseFloat(e.target.value) || 0)} className="text-xl font-bold text-gray-800 bg-transparent text-center sm:text-right w-40 rounded-lg p-1 hover:bg-gray-100 focus:bg-gray-100 focus:ring-2 focus:ring-rose-300 outline-none" />
+                                <input type="number" value={metaOrcamento} onChange={e => atualizarConfig({ metaOrcamento: parseFloat(e.target.value) || 0 })} className="text-xl font-bold text-gray-800 bg-transparent text-center sm:text-right w-40 rounded-lg p-1 hover:bg-gray-100 focus:bg-gray-100 focus:ring-2 focus:ring-rose-300 outline-none" />
                             </div>
                             <div className="text-center sm:text-right">
-                                <div className="text-sm text-gray-500 flex items-center justify-center sm:justify-end gap-2"><Calendar className="w-4 h-4" /> Data do Casamento</div>
-                                <input type="date" value={dataCasamento} onChange={e => setDataCasamento(e.target.value)} className="text-xl font-bold text-gray-800 bg-transparent text-center sm:text-right w-40 rounded-lg p-1 hover:bg-gray-100 focus:bg-gray-100 focus:ring-2 focus:ring-rose-300 outline-none" />
+                                <div className="text-sm text-gray-500 flex items-center justify-center sm:justify-end gap-2"><Calendar className="w-4 h-4" /> Data</div>
+                                <input type="date" value={dataCasamento} onChange={e => atualizarConfig({ dataCasamento: e.target.value })} className="text-xl font-bold text-gray-800 bg-transparent text-center sm:text-right w-40 rounded-lg p-1 hover:bg-gray-100 focus:bg-gray-100 focus:ring-2 focus:ring-rose-300 outline-none" />
                             </div>
+                            <button onClick={onLogout} className="bg-gray-200 p-3 rounded-full text-gray-600 hover:bg-red-100 hover:text-red-600 transition-colors"><LogOut className="w-5 h-5" /></button>
                         </div>
                     </div>
                 </div>
@@ -219,6 +292,7 @@ const AppFinancasCasamento = () => {
                         </div>
                     </div>
                 )}
+                
                 {abaAtiva === 'despesas' && (
                     <div className="space-y-6">
                         <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -232,12 +306,46 @@ const AppFinancasCasamento = () => {
                                 <button onClick={adicionarDespesa} className="bg-gradient-to-r from-rose-500 to-pink-500 text-white px-6 py-3 rounded-xl font-medium hover:from-rose-600 hover:to-pink-600 transition-all flex items-center justify-center space-x-2"><PlusCircle className="w-5 h-5" /><span>Adicionar</span></button>
                             </div>
                         </div>
+                        
                         <div className="bg-white rounded-2xl shadow-xl p-6">
                             <h3 className="text-lg font-semibold mb-4">Lista de Despesas</h3>
-                            <div className="space-y-3">{despesas.map((despesa) => { const infoCategoria = CATEGORIAS.find(c => c.name === despesa.categoria); const Icone = infoCategoria?.icon || Heart; return (<div key={despesa.id} className="flex flex-col sm:flex-row items-center justify-between p-4 bg-gray-50 rounded-xl gap-3"><div className="flex items-center space-x-4 w-full sm:w-1/2"><div className={`${infoCategoria?.color || 'bg-gray-500'} p-2 rounded-lg`}><Icone className="w-5 h-5 text-white" /></div><div><p className="font-medium text-gray-800">{despesa.descricao}</p><p className="text-sm text-gray-600">{despesa.categoria} • Venc: {formatarData(despesa.data)}</p></div></div><div className="flex items-center space-x-4 w-full sm:w-auto justify-between"><div className="text-right"><p className="font-bold text-gray-800">{formatarMoeda(despesa.valor)}</p><p className={`text-sm font-semibold ${despesa.pago ? 'text-green-600' : 'text-red-600'}`}>{despesa.pago ? 'Pago' : 'Pendente'}</p></div><button onClick={() => alternarPagamento(despesa.id)} className={`p-2 rounded-lg ${despesa.pago ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}><CheckCircle className="w-5 h-5" /></button><button onClick={() => deletarDespesa(despesa.id)} className="p-2 bg-gray-200 text-gray-600 rounded-lg hover:bg-red-100 hover:text-red-600 transition-colors"><Trash2 className="w-5 h-5" /></button></div></div>);})}</div>
+                            <div className="space-y-3">
+                                {despesas.map((despesa) => {
+                                    const infoCategoria = CATEGORIAS.find(c => c.name === despesa.categoria);
+                                    const Icone = infoCategoria?.icon || Heart;
+                                    return (
+                                        <div key={despesa.id} className="flex flex-col sm:flex-row items-center justify-between p-4 bg-gray-50 rounded-xl gap-3">
+                                            <div className="flex items-center space-x-4 w-full sm:w-2/3">
+                                                <div className={`${infoCategoria?.color || 'bg-gray-500'} p-2 rounded-lg`}><Icone className="w-5 h-5 text-white" /></div>
+                                                <div>
+                                                    <p className="font-medium text-gray-800">{despesa.descricao}</p>
+                                                    <p className="text-sm text-gray-600">{despesa.categoria} • Venc: {formatarData(despesa.data)}</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center space-x-2 w-full sm:w-auto justify-between">
+                                                <div className="text-right">
+                                                    <p className="font-bold text-gray-800">{formatarMoeda(despesa.valor)}</p>
+                                                    <p className={`text-sm font-semibold ${despesa.pago ? 'text-green-600' : 'text-red-600'}`}>{despesa.pago ? 'Pago' : 'Pendente'}</p>
+                                                </div>
+                                                {despesa.comprovanteURL ? (
+                                                    <a href={despesa.comprovanteURL} target="_blank" rel="noopener noreferrer" className="p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200"><Paperclip className="w-5 h-5" /></a>
+                                                ) : (
+                                                    <label className={`p-2 rounded-lg cursor-pointer ${uploading === despesa.id ? 'bg-gray-300 animate-pulse' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}>
+                                                        <UploadCloud className="w-5 h-5" />
+                                                        <input type="file" className="hidden" onChange={(e) => uploadComprovante(e, despesa.id)} disabled={uploading === despesa.id} />
+                                                    </label>
+                                                )}
+                                                <button onClick={() => alternarPagamento(despesa.id, despesa.pago)} className={`p-2 rounded-lg ${despesa.pago ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}><CheckCircle className="w-5 h-5" /></button>
+                                                <button onClick={() => deletarDespesa(despesa.id)} className="p-2 bg-gray-200 text-gray-600 rounded-lg hover:bg-red-100 hover:text-red-600 transition-colors"><Trash2 className="w-5 h-5" /></button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>
                 )}
+
                 {abaAtiva === 'renda' && (
                     <div className="space-y-6">
                         <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -255,6 +363,7 @@ const AppFinancasCasamento = () => {
                         </div>
                     </div>
                 )}
+
                 {abaAtiva === 'planejamento' && (
                     <div className="space-y-6">
                         <div className="text-center bg-white rounded-2xl shadow-xl p-6">
@@ -301,4 +410,78 @@ const AppFinancasCasamento = () => {
     );
 };
 
-export default AppFinancasCasamento;
+// --- Componente Raiz que gerencia a autenticação ---
+const App = () => {
+    const [auth, setAuth] = useState(null);
+    const [db, setDb] = useState(null);
+    const [storage, setStorage] = useState(null);
+    const [user, setUser] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [configError, setConfigError] = useState(false);
+
+    useEffect(() => {
+        if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "SUA_API_KEY") {
+            console.error("Configuração do Firebase não encontrada!");
+            setConfigError(true);
+            setLoading(false);
+            return;
+        }
+        const app = initializeApp(firebaseConfig);
+        setAuth(getAuth(app));
+        setDb(getFirestore(app));
+        setStorage(getStorage(app));
+    }, []);
+
+    useEffect(() => {
+        if (!auth) return;
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, [auth]);
+
+    const handleLogin = async () => {
+        const provider = new GoogleAuthProvider();
+        try {
+            await signInWithPopup(auth, provider);
+        } catch (error) {
+            console.error("Erro ao fazer login com Google:", error);
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await signOut(auth);
+        } catch (error) {
+            console.error("Erro ao fazer logout:", error);
+        }
+    };
+
+    if (loading) {
+        return <div className="flex items-center justify-center min-h-screen bg-rose-50 text-rose-500">Carregando...</div>;
+    }
+    
+    if (configError) {
+         return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 text-red-700 p-4 text-center">
+                <AlertCircle className="w-16 h-16 mb-4" />
+                <h1 className="text-2xl font-bold mb-2">Erro de Configuração</h1>
+                <p className="max-w-md">A configuração do Firebase não foi adicionada. Por favor, edite o arquivo <strong>App.jsx</strong> e cole as credenciais do seu projeto Firebase para continuar.</p>
+            </div>
+        );
+    }
+
+    if (!user) {
+        return <LoginPage onLogin={handleLogin} />;
+    }
+
+    if (!EMAILS_AUTORIZADOS.includes(user.email)) {
+        console.warn(`Usuário não autorizado: ${user.email}`);
+        return <AccessDeniedPage user={user} onLogout={handleLogout} />;
+    }
+
+    return <WeddingPlanner user={user} onLogout={handleLogout} db={db} storage={storage} />;
+};
+
+export default App;
