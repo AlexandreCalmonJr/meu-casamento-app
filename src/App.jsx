@@ -26,8 +26,8 @@ const firebaseConfig = {
 // =================================================================
 //  INSTRUÇÃO 2: Cole as credenciais do seu projeto Supabase aqui.
 // =================================================================
-const supabaseUrl = 'SUA_URL_DO_PROJETO_SUPABASE';
-const supabaseAnonKey = 'SUA_CHAVE_ANON_PUBLIC_SUPABASE';
+const supabaseUrl = 'https://nevrswoajtozuuszcabg.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ldnJzd29hanRvenV1c3pjYWJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4NDA0MzQsImV4cCI6MjA2ODQxNjQzNH0.LQ7xmwgHrxhjC8fvfgNh62xyYDk6MgR29092G-kF2PE';
 
 // --- ID Compartilhado para o Casamento ---
 // Este ID garante que ambos os usuários acessem os mesmos dados.
